@@ -80,6 +80,9 @@ func (v *Validator) Validate(ctx context.Context, c *Client) error {
 			"jwks_uri":               c.JSONWebKeysURI,
 			"backchannel_logout_uri": c.BackChannelLogoutURI,
 		}
+		if c.SectorIdentifierURI != "" {
+			values["sector_identifier_uri"] = c.SectorIdentifierURI
+		}
 
 		for k, v := range c.RequestURIs {
 			values[fmt.Sprintf("request_uris.%d", k)] = v
