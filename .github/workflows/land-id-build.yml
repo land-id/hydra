@@ -1,0 +1,20 @@
+# Builds Land id's Hydra image from this fork's land-id branch and pushes it to
+# the shared ory-hydra ECR repository, tagged with the commit's short SHA (and
+# latest). argo-cd's ory-hydra-values.yml pins the SHA per environment.
+#
+# The land-id branch is upstream's latest release tag plus our patches; see
+# LAND_ID.md for what they are and how to move to a new release.
+name: Land id build
+
+on:
+  push:
+    branches:
+      - land-id
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    uses: land-id/workflows/.github/workflows/build-push-ecr.yml@main
+    with:
+      service: ory-hydra
+      dockerfile: .docker/Dockerfile-local-build
