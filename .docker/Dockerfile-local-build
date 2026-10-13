@@ -1,3 +1,6 @@
+# Modified by Land id in 2026: pinned the Go toolchain to a patched release.
+# See LAND_ID.md.
+
 FROM golang:1.26.9 AS builder
 
 WORKDIR /go/src/github.com/ory/hydra

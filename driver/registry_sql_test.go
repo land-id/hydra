@@ -1,5 +1,8 @@
 // Copyright © 2022 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+//
+// Modified by Land id in 2026: adapted an upstream SSRF test cherry-picked
+// onto v26.2.0. See LAND_ID.md.
 
 package driver
 

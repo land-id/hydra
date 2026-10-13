@@ -1,5 +1,8 @@
 // Copyright © 2022 Ory Corp
 // SPDX-License-Identifier: Apache-2.0
+//
+// Modified by Land id in 2026: dynamic client registration responses omit
+// empty optional fields. See LAND_ID.md.
 
 package client
 

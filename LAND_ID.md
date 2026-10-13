@@ -24,6 +24,11 @@ repository, tagged with the short commit SHA. argo-cd's
   and the build pinned to a patched Go toolchain.
 - This file and the build workflow.
 
+Files we changed carry a "Modified by Land id" note under their license
+header, as Apache 2.0 asks. Files that can't hold a comment (`go.sum` and the
+test snapshots under `client/.snapshots/`) are covered by this list instead.
+Cherry-picked upstream commits are Ory's own code and aren't marked.
+
 Not yet picked, because they conflict with refactors on `master`: the herodot
 upgrade (`d1f2ef96`, error-handling info leaks) and the moby/moby switch that
 drops `github.com/docker/docker` (`680b2ac6`, only reachable from test

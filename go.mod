@@ -1,3 +1,6 @@
+// Modified by Land id in 2026: dependency bumps for advisories govulncheck
+// reports as reachable. See LAND_ID.md.
+
 module github.com/ory/hydra/v2
 
 go 1.26.0
