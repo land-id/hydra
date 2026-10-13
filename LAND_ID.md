@@ -27,7 +27,13 @@ repository, tagged with the short commit SHA. argo-cd's
 Files we changed carry a "Modified by Land id" note under their license
 header, as Apache 2.0 asks. Files that can't hold a comment (`go.sum` and the
 test snapshots under `client/.snapshots/`) are covered by this list instead.
-Cherry-picked upstream commits are Ory's own code and aren't marked.
+The cherry-picks above, being Ory's own code, weren't marked.
+
+For PRs into `land-id`, `.github/workflows/land-id-modified-notice.yml` adds
+the note to every modified file that lacks one (cherry-picks included) and
+pushes it to the PR's branch. Label a PR `skip-modified-notice` to skip it,
+e.g. one that moves to a new upstream release. Its pushes don't trigger other
+workflows, so re-run checks after it if you need them on the final commit.
 
 Not yet picked, because they conflict with refactors on `master`: the herodot
 upgrade (`d1f2ef96`, error-handling info leaks) and the moby/moby switch that

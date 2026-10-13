@@ -1,0 +1,80 @@
+# Adds a "Modified by Land id" notice to each file a PR into land-id modifies,
+# if it doesn't already have one, and pushes the result to the PR's branch.
+# Apache 2.0 asks that modified files carry a prominent notice that they were
+# changed; see LAND_ID.md.
+#
+# Only files that exist in the base branch count as modified; new files are
+# entirely ours. Label a PR "skip-modified-notice" to skip it, e.g. one that
+# only moves to a new upstream release.
+name: Land id modified notice
+
+on:
+  pull_request:
+    branches:
+      - land-id
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: land-id-modified-notice-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  add-notice:
+    # PRs from other repositories get a read-only token and can't be pushed to.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-modified-notice')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Add notices
+        id: notice
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base="$(git merge-base "$BASE_SHA" HEAD)"
+          # The notice script lives on land-id, so a PR can't change what runs here.
+          git show "$BASE_SHA:.github/scripts/add-modified-notice.py" > "$RUNNER_TEMP/add-modified-notice.py"
+          git diff --name-only -z --diff-filter=M "$base" HEAD \
+            | xargs -0 --no-run-if-empty python3 "$RUNNER_TEMP/add-modified-notice.py" \
+            | tee "$RUNNER_TEMP/changed.txt"
+          if [ -s "$RUNNER_TEMP/changed.txt" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check Go formatting
+        if: steps.notice.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          unformatted="$(grep '\.go$' "$RUNNER_TEMP/changed.txt" | xargs --no-run-if-empty gofmt -l)"
+          if [ -n "$unformatted" ]; then
+            echo "Notices left these files unformatted:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Commit and push
+        if: steps.notice.outputs.changed == 'true'
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          xargs -a "$RUNNER_TEMP/changed.txt" -d '\n' git add --
+          git commit -m "docs: mark the files this PR modifies
+
+          Adds a \"Modified by Land id\" notice to each file this PR modifies that
+          lacked one, as Apache 2.0 asks. See LAND_ID.md."
+          git push origin "HEAD:refs/heads/$HEAD_REF"
