@@ -156,7 +156,47 @@ func (h *Handler) createOidcDynamicClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.r.Writer().WriteCreated(w, r, urlx.MustJoin("admin", ClientsHandlerPath, url.PathEscape(c.GetID())), &c)
+	h.r.Writer().WriteCreated(w, r, urlx.MustJoin("admin", ClientsHandlerPath, url.PathEscape(c.GetID())), dynamicClientResponse(c))
+}
+
+// dynamicClientFieldsOmittedWhenEmpty are the optional client metadata fields
+// that the dynamic client registration endpoints leave out of their responses
+// when they have no value, rather than returning them as "", null, [] or {}.
+// RFC 7591 clients like the MCP TypeScript SDK reject a response with, for
+// example, an empty client_uri (not a URL) or a null contacts (not an array).
+// The admin endpoints still return every field.
+var dynamicClientFieldsOmittedWhenEmpty = []string{
+	"client_uri",
+	"logo_uri",
+	"policy_uri",
+	"tos_uri",
+	"contacts",
+	"grant_types",
+	"response_types",
+	"jwks",
+}
+
+// dynamicClientResponse renders c for a dynamic client registration response,
+// leaving out the fields in dynamicClientFieldsOmittedWhenEmpty that are empty.
+func dynamicClientResponse(c *Client) any {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return c
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return c
+	}
+
+	for _, name := range dynamicClientFieldsOmittedWhenEmpty {
+		switch strings.TrimSpace(string(fields[name])) {
+		case `""`, "null", "[]", "{}":
+			delete(fields, name)
+		}
+	}
+
+	return fields
 }
 
 func (h *Handler) CreateClient(r *http.Request, validator func(context.Context, *Client) error, isDynamic bool) (*Client, error) {
@@ -384,7 +424,7 @@ func (h *Handler) setOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.r.Writer().Write(w, r, &c)
+	h.r.Writer().Write(w, r, dynamicClientResponse(&c))
 }
 
 // Patch OAuth 2.0 Client Parameters
@@ -666,7 +706,7 @@ func (h *Handler) getOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 
 	c.Secret = ""
 	c.Metadata = nil
-	h.r.Writer().Write(w, r, c)
+	h.r.Writer().Write(w, r, dynamicClientResponse(c))
 }
 
 // Delete OAuth2 Client Parameters

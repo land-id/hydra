@@ -434,6 +434,13 @@ func TestHandler(t *testing.T) {
 							assert.NotEmpty(t, gjson.Get(body, key).String(), "%s in %s", key, body)
 						}
 					}
+					if tc.path == client.DynClientsHandlerPath && tc.statusCode == http.StatusCreated {
+						// RFC 7591 clients such as the MCP TypeScript SDK reject
+						// empty values for these optional fields.
+						for _, key := range []string{"client_uri", "logo_uri", "policy_uri", "tos_uri", "contacts", "grant_types", "response_types", "jwks"} {
+							assert.False(t, gjson.Get(body, key).Exists(), "%s in %s", key, body)
+						}
+					}
 					snapshotx.SnapshotT(t, json.RawMessage(body), snapshotx.ExceptPaths(exclude...))
 				})
 			}
