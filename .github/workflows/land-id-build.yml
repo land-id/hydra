@@ -2,6 +2,10 @@
 # the shared ory-hydra ECR repository, tagged with the commit's short SHA (and
 # latest). argo-cd's ory-hydra-values.yml pins the SHA per environment.
 #
+# This mirrors land-id/workflows' build-push-ecr workflow rather than calling
+# it: that repo is private, and GitHub doesn't let a public repo use a private
+# repo's reusable workflows.
+#
 # The land-id branch is upstream's latest release tag plus our patches; see
 # LAND_ID.md for what they are and how to move to a new release.
 name: Land id build
@@ -12,9 +16,42 @@ on:
       - land-id
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-push:
-    uses: land-id/workflows/.github/workflows/build-push-ecr.yml@main
-    with:
-      service: ory-hydra
-      dockerfile: .docker/Dockerfile-local-build
+    if: github.repository == 'land-id/hydra'
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::556999232227:role/github-ecr-publish-role
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: "556999232227"
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          sha="${GITHUB_SHA::7}"
+          image="$REGISTRY/ory-hydra"
+          docker build \
+            -t "$image:$sha" \
+            -t "$image:latest" \
+            -f .docker/Dockerfile-local-build .
+          docker push "$image:$sha"
+          docker push "$image:latest"
