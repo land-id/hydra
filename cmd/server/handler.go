@@ -27,6 +27,7 @@ import (
 	"github.com/ory/x/networkx"
 	"github.com/ory/x/otelx"
 	"github.com/ory/x/otelx/semconv"
+	"github.com/ory/x/popx"
 	"github.com/ory/x/prometheusx"
 	"github.com/ory/x/reqlog"
 	"github.com/ory/x/serverx"
@@ -98,6 +99,10 @@ func RunServeAll(dOpts []driver.OptionsModifier) func(cmd *cobra.Command, args [
 			return err
 		}
 
+		if err := popx.VerifyDialect(ctx, d.Persister().Connection(ctx)); err != nil {
+			return err
+		}
+
 		eg, ctx := errgroup.WithContext(ctx)
 		ms := sqa(ctx, d, cmd)
 
@@ -121,8 +126,6 @@ var httpMetrics = prometheusx.NewHTTPMetrics("hydra", prometheusx.HTTPPrefix, co
 func adminServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metricsx.Service) (func() error, error) {
 	cfg := d.Config().ServeAdmin(contextx.RootContext)
 
-	n := negroni.New()
-
 	logger := reqlog.
 		NewMiddlewareFromLogger(d.Logger(),
 			fmt.Sprintf("hydra/admin: %s", d.Config().IssuerURL(ctx).String()))
@@ -130,11 +133,19 @@ func adminServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metrics
 		logger.ExcludePaths(healthx.AliveCheckPath, healthx.ReadyCheckPath, "/admin"+prometheusx.MetricsPrometheusPath)
 	}
 
-	n.UseFunc(httprouterx.TrimTrailingSlashNegroni)
-	n.UseFunc(httprouterx.NoCacheNegroni)
-	n.UseFunc(httprouterx.AddAdminPrefixIfNotPresentNegroni)
-	n.UseFunc(semconv.Middleware)
-	n.Use(logger)
+	recovery := negroni.NewRecovery()
+	recovery.Logger = d.Logger()
+
+	router := httprouterx.NewRouterAdminWithPrefix()
+	n := negroni.New(
+		recovery,
+		negroni.HandlerFunc(httprouterx.TrimTrailingSlashNegroni),
+		negroni.HandlerFunc(httprouterx.NoCacheNegroni),
+		negroni.HandlerFunc(httprouterx.AddAdminPrefixIfNotPresentNegroni),
+		negroni.HandlerFunc(semconv.Middleware),
+		httpMetrics,
+		logger,
+	)
 
 	if cfg.TLS.Enabled && !networkx.AddressIsUnixSocket(cfg.Host) {
 		mw, err := tlsx.EnforceTLSRequests(d, cfg.TLS.AllowTerminationFrom)
@@ -157,13 +168,11 @@ func adminServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metrics
 	})
 	n.Use(sqaMetrics)
 
-	router := httprouterx.NewRouterAdminWithPrefix(httpMetrics)
-	router.Handler("", "/", serverx.DefaultNotFoundHandler)
+	router.Handle("/", serverx.DefaultNotFoundHandler)
 	d.RegisterAdminRoutes(router)
 
 	n.UseHandler(router)
 
-	n.UseFunc(otelx.SpanNameRecorderNegroniFunc)
 	return func() error {
 		return serve(ctx, d, cfg, n, "admin")
 	}, nil
@@ -171,8 +180,6 @@ func adminServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metrics
 
 func publicServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metricsx.Service) (func() error, error) {
 	cfg := d.Config().ServePublic(contextx.RootContext)
-
-	n := negroni.New()
 
 	logger := reqlog.NewMiddlewareFromLogger(
 		d.Logger(),
@@ -182,10 +189,19 @@ func publicServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metric
 		logger.ExcludePaths(healthx.AliveCheckPath, healthx.ReadyCheckPath)
 	}
 
-	n.UseFunc(httprouterx.TrimTrailingSlashNegroni)
-	n.UseFunc(httprouterx.NoCacheNegroni)
-	n.UseFunc(semconv.Middleware)
-	n.Use(logger)
+	recovery := negroni.NewRecovery()
+	recovery.Logger = d.Logger()
+
+	router := httprouterx.NewRouterPublic()
+	n := negroni.New(
+		recovery,
+		negroni.HandlerFunc(httprouterx.TrimTrailingSlashNegroni),
+		negroni.HandlerFunc(httprouterx.NoCacheNegroni),
+		negroni.HandlerFunc(semconv.Middleware),
+		httpMetrics,
+		logger,
+	)
+
 	if cfg.TLS.Enabled && !networkx.AddressIsUnixSocket(cfg.Host) {
 		mw, err := tlsx.EnforceTLSRequests(d, cfg.TLS.AllowTerminationFrom)
 		if err != nil {
@@ -207,12 +223,10 @@ func publicServer(ctx context.Context, d *driver.RegistrySQL, sqaMetrics *metric
 	})
 	n.Use(sqaMetrics)
 
-	router := httprouterx.NewRouterPublic(httpMetrics)
-	router.Handler("", "/", serverx.DefaultNotFoundHandler)
+	router.Handle("/", serverx.DefaultNotFoundHandler)
 	d.RegisterPublicRoutes(ctx, router)
 
 	n.UseHandler(router)
-	n.UseFunc(otelx.SpanNameRecorderNegroniFunc)
 	return func() error {
 		return serve(ctx, d, cfg, n, "public")
 	}, nil

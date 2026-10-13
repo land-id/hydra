@@ -25,7 +25,7 @@ func TestPublicHealthHandler(t *testing.T) {
 		require.NoError(t, err)
 		req.Host = "example.com"
 		req.Header.Add("Origin", "https://example.com")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testhelpers.NewTestClient(t).Do(req)
 		require.NoError(t, err)
 		return resp
 	}
@@ -72,7 +72,7 @@ func TestPublicHealthHandler(t *testing.T) {
 			require.NoError(t, reg.Migrator().MigrateUp(t.Context()))
 			require.NoError(t, reg.InitNetwork(t.Context()))
 
-			public := httprouterx.NewTestRouterPublic(t)
+			public := httprouterx.NewRouterPublic()
 			reg.RegisterPublicRoutes(t.Context(), public)
 
 			ts := httptest.NewServer(public)

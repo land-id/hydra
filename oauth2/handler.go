@@ -64,7 +64,8 @@ const (
 )
 
 // Taken from https://github.com/ory/hydra/v2/fosite/blob/049ed1924cd0b41f12357b0fe617530c264421ac/handler/openid/flow_explicit_auth.go#L29
-var oidcParameters = []string{"grant_type",
+var oidcParameters = []string{
+	"grant_type",
 	"max_age",
 	"prompt",
 	"acr_values",
@@ -85,8 +86,8 @@ func NewHandler(r InternalRegistry) *Handler {
 }
 
 func (h *Handler) SetPublicRoutes(public *httprouterx.RouterPublic, corsMiddleware func(http.Handler) http.Handler) {
-	public.Handler("OPTIONS", TokenPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("POST", TokenPath, corsMiddleware(http.HandlerFunc(h.oauth2TokenExchange)))
+	public.OPTIONS(TokenPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.POST(TokenPath, corsMiddleware(http.HandlerFunc(h.oauth2TokenExchange)).ServeHTTP)
 
 	public.GET(AuthPath, h.oAuth2Authorize)
 	public.POST(AuthPath, h.oAuth2Authorize)
@@ -111,18 +112,18 @@ func (h *Handler) SetPublicRoutes(public *httprouterx.RouterPublic, corsMiddlewa
 	))
 	public.GET(DefaultErrorPath, h.DefaultErrorHandler)
 
-	public.Handler("OPTIONS", RevocationPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("POST", RevocationPath, corsMiddleware(http.HandlerFunc(h.revokeOAuth2Token)))
-	public.Handler("OPTIONS", WellKnownPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("GET", WellKnownPath, corsMiddleware(http.HandlerFunc(h.discoverOidcConfiguration)))
-	public.Handler("OPTIONS", OauthAuthorizationServerPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("GET", OauthAuthorizationServerPath, corsMiddleware(http.HandlerFunc(h.discoverOidcConfiguration)))
-	public.Handler("OPTIONS", UserinfoPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("GET", UserinfoPath, corsMiddleware(http.HandlerFunc(h.getOidcUserInfo)))
-	public.Handler("POST", UserinfoPath, corsMiddleware(http.HandlerFunc(h.getOidcUserInfo)))
+	public.OPTIONS(RevocationPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.POST(RevocationPath, corsMiddleware(http.HandlerFunc(h.revokeOAuth2Token)).ServeHTTP)
+	public.OPTIONS(WellKnownPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.GET(WellKnownPath, corsMiddleware(http.HandlerFunc(h.discoverOidcConfiguration)).ServeHTTP)
+	public.OPTIONS(OauthAuthorizationServerPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.GET(OauthAuthorizationServerPath, corsMiddleware(http.HandlerFunc(h.discoverOidcConfiguration)).ServeHTTP)
+	public.OPTIONS(UserinfoPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.GET(UserinfoPath, corsMiddleware(http.HandlerFunc(h.getOidcUserInfo)).ServeHTTP)
+	public.POST(UserinfoPath, corsMiddleware(http.HandlerFunc(h.getOidcUserInfo)).ServeHTTP)
 
-	public.Handler("OPTIONS", VerifiableCredentialsPath, corsMiddleware(http.HandlerFunc(h.handleOptions)))
-	public.Handler("POST", VerifiableCredentialsPath, corsMiddleware(http.HandlerFunc(h.createVerifiableCredential)))
+	public.OPTIONS(VerifiableCredentialsPath, corsMiddleware(http.HandlerFunc(h.handleOptions)).ServeHTTP)
+	public.POST(VerifiableCredentialsPath, corsMiddleware(http.HandlerFunc(h.createVerifiableCredential)).ServeHTTP)
 
 	public.POST(DeviceAuthPath, h.oAuth2DeviceFlow)
 	public.GET(DeviceVerificationPath, h.performOAuth2DeviceVerificationFlow)
@@ -155,7 +156,7 @@ func (h *Handler) performOidcFrontOrBackChannelLogout(w http.ResponseWriter, r *
 	ctx := r.Context()
 
 	handled, err := h.r.ConsentStrategy().HandleOpenIDConnectLogout(ctx, w, r)
-	if errors.Is(err, consent.ErrAbortOAuth2Request) {
+	if errors.Is(err, consent.ErrUserRedirected) {
 		return
 	} else if err != nil {
 		x.LogError(r, err, h.r.Logger())
@@ -507,7 +508,7 @@ type CredentialSupportedDraft00 struct {
 //	  default: errorOAuth2
 //
 //	Extensions:
-//	  x-ory-ratelimit-bucket: hydra-public-low
+//	  x-ory-ratelimit-bucket: hydra-public-high
 func (h *Handler) discoverOidcConfiguration(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key, err := h.r.OpenIDJWTSigner().GetPublicKey(ctx)
@@ -742,7 +743,7 @@ func (h *Handler) getOidcUserInfo(w http.ResponseWriter, r *http.Request) {
 //	  default: errorOAuth2
 //
 //	Extensions:
-//	  x-ory-ratelimit-bucket: hydra-admin-low
+//	  x-ory-ratelimit-bucket: hydra-admin-high
 func (h *Handler) performOAuth2DeviceVerificationFlow(w http.ResponseWriter, r *http.Request) {
 	var (
 		ctx = r.Context()
@@ -761,12 +762,7 @@ func (h *Handler) performOAuth2DeviceVerificationFlow(w http.ResponseWriter, r *
 	// persisted to the database, while only one of them was actually used to validate the user_code
 	// (see https://github.com/ory/hydra/pull/3851#discussion_r1843678761)
 	f, err := h.r.ConsentStrategy().HandleOAuth2DeviceAuthorizationRequest(ctx, w, r)
-	if errors.Is(err, consent.ErrAbortOAuth2Request) {
-		x.LogError(r, err, h.r.Logger())
-		return
-	} else if e := &(fosite.RFC6749Error{}); errors.As(err, &e) {
-		x.LogError(r, err, h.r.Logger())
-		h.r.Writer().WriteError(w, r, err)
+	if errors.Is(err, consent.ErrUserRedirected) {
 		return
 	} else if err != nil {
 		x.LogError(r, err, h.r.Logger())
@@ -881,9 +877,9 @@ type _ struct {
 //	  default: errorOAuth2
 //
 //	Extensions:
-//	  x-ory-ratelimit-bucket: hydra-public-low
+//	  x-ory-ratelimit-bucket: hydra-public-high
 func (h *Handler) oAuth2DeviceFlow(w http.ResponseWriter, r *http.Request) {
-	var ctx = r.Context()
+	ctx := r.Context()
 
 	request, err := h.r.OAuth2Provider().NewDeviceRequest(ctx, r)
 	if err != nil {
@@ -891,7 +887,7 @@ func (h *Handler) oAuth2DeviceFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var session = &Session{
+	session := &Session{
 		DefaultSession: &openid.DefaultSession{
 			Headers: &jwt.Headers{},
 		},
@@ -999,7 +995,7 @@ type _ struct {
 //	  default: errorOAuth2
 //
 //	Extensions:
-//	  x-ory-ratelimit-bucket: hydra-admin-low
+//	  x-ory-ratelimit-bucket: hydra-admin-high
 func (h *Handler) introspectOAuth2Token(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	session := NewSessionWithCustomClaims(ctx, h.c, "")
@@ -1296,13 +1292,7 @@ func (h *Handler) oAuth2Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fl, err := h.r.ConsentStrategy().HandleOAuth2AuthorizationRequest(ctx, w, r, authorizeRequest)
-	if errors.Is(err, consent.ErrAbortOAuth2Request) {
-		x.LogError(r, err, h.r.Logger())
-		// do nothing
-		return
-	} else if e := &(fosite.RFC6749Error{}); errors.As(err, &e) {
-		x.LogError(r, err, h.r.Logger())
-		h.writeAuthorizeError(w, r, authorizeRequest, err)
+	if errors.Is(err, consent.ErrUserRedirected) {
 		return
 	} else if err != nil {
 		x.LogError(r, err, h.r.Logger())
@@ -1356,7 +1346,7 @@ type _ struct {
 //	  default: errorOAuth2
 //
 //	Extensions:
-//	  x-ory-ratelimit-bucket: hydra-admin-high
+//	  x-ory-ratelimit-bucket: hydra-admin-low
 func (h *Handler) deleteOAuth2Token(w http.ResponseWriter, r *http.Request) {
 	clientID := r.URL.Query().Get("client_id")
 	if clientID == "" {
@@ -1501,7 +1491,6 @@ func (h *Handler) createVerifiableCredential(w http.ResponseWriter, r *http.Requ
 	session := NewSessionWithCustomClaims(ctx, h.c, "")
 	accessToken := fosite.AccessTokenFromRequest(r)
 	tokenType, _, err := h.r.OAuth2Provider().IntrospectToken(ctx, accessToken, fosite.AccessToken, session)
-
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return

@@ -11,8 +11,6 @@ import (
 	"github.com/ory/hydra/v2/cmd/cliclient"
 	"github.com/ory/x/cmdx"
 	"github.com/ory/x/flagx"
-
-	"github.com/ory/hydra/v2/cmd/cli"
 )
 
 const (
@@ -81,7 +79,7 @@ To encrypt an auto-generated OAuth2 Client Secret, use flags ` + "`--pgp-key`" +
 				return err
 			}
 
-			ek, encryptSecret, err := cli.NewEncryptionKey(cmd, nil)
+			ek, encryptSecret, err := NewEncryptionKey(cmd, nil)
 			if err != nil {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to load encryption key: %s", err)
 				return err

@@ -208,7 +208,7 @@ func (c *Config) GetIDTokenIssuer(ctx context.Context) string {
 }
 
 func (c *Config) GetAllowedPrompts(context.Context) []string {
-	return []string{"login", "none", "consent", "registration"}
+	return []string{"login", "none", "consent", "registration", "select_account"}
 }
 
 func (c *Config) GetRedirectSecureChecker(context.Context) func(context.Context, *url.URL) bool {
@@ -231,6 +231,7 @@ func (c *Config) GetTokenURLs(ctx context.Context) []string {
 	return stringslice.Unique([]string{
 		c.deps.Config().OAuth2TokenURL(ctx).String(),
 		urlx.AppendPaths(c.deps.Config().PublicURL(ctx), oauth2.TokenPath).String(),
+		urlx.AppendPaths(c.deps.Config().IssuerURL(ctx), oauth2.TokenPath).String(),
 	})
 }
 

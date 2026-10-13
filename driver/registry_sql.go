@@ -58,38 +58,42 @@ import (
 )
 
 type RegistrySQL struct {
-	l                    *logrusx.Logger
-	conf                 *config.DefaultProvider
-	fh                   fosite.Hasher
-	cv                   *client.Validator
-	ctxer                contextx.Contextualizer
-	hh                   *healthx.Handler
-	kc                   *aead.AESGCM
-	flowc                *aead.XChaCha20Poly1305
-	cos                  consent.Strategy
-	writer               herodot.Writer
-	hsm                  hsm.Context
-	forv                 *openid.OpenIDConnectRequestValidator
-	fop                  fosite.OAuth2Provider
-	trc                  *otelx.Tracer
-	tracerWrapper        func(*otelx.Tracer) *otelx.Tracer
-	arhs                 []oauth2.AccessRequestHook
-	basePersister        *sql.BasePersister
-	accessTokenStorage   foauth2.AccessTokenStorage
-	authorizeCodeStorage foauth2.AuthorizeCodeStorage
-	oc                   fosite.Configurator
-	oidcs                jwk.JWTSigner
-	ats                  jwk.JWTSigner
-	hmacs                foauth2.CoreStrategy
-	jwtStrategy          foauth2.AccessTokenStrategy
-	enigmaHMAC           *hmac.HMACStrategy
-	deviceHmac           *rfc8628.DefaultDeviceStrategy
-	fc                   *fositex.Config
-	publicCORS           *cors.Cors
-	kratos               kratos.Client
-	fositeFactories      []fositex.Factory
-	migrator             *sql.MigrationManager
-	dbOptsModifier       []func(details *pop.ConnectionDetails)
+	l                           *logrusx.Logger
+	conf                        *config.DefaultProvider
+	fh                          fosite.Hasher
+	cv                          *client.Validator
+	ctxer                       contextx.Contextualizer
+	hh                          *healthx.Handler
+	kc                          *aead.AESGCM
+	flowc                       *aead.XChaCha20Poly1305
+	cos                         consent.Strategy
+	writer                      herodot.Writer
+	hsm                         hsm.Context
+	forv                        *openid.OpenIDConnectRequestValidator
+	fop                         fosite.OAuth2Provider
+	trc                         *otelx.Tracer
+	tracerWrapper               func(*otelx.Tracer) *otelx.Tracer
+	arhs                        []oauth2.AccessRequestHook
+	basePersister               *sql.BasePersister
+	accessTokenStorage          foauth2.AccessTokenStorage
+	authorizeCodeStorage        foauth2.AuthorizeCodeStorage
+	authorizeCodeStrategy       foauth2.AuthorizeCodeStrategy
+	pkceRequestStorage          pkce.PKCERequestStorage
+	openIDConnectRequestStorage openid.OpenIDConnectRequestStorage
+	oc                          fosite.Configurator
+	oidcs                       jwk.JWTSigner
+	ats                         jwk.JWTSigner
+	hmacs                       foauth2.CoreStrategy
+	jwtStrategy                 foauth2.AccessTokenStrategy
+	enigmaHMAC                  *hmac.HMACStrategy
+	deviceHmac                  *rfc8628.DefaultDeviceStrategy
+	fc                          *fositex.Config
+	publicCORS                  *cors.Cors
+	kratos                      kratos.Client
+	fositeFactories             []fositex.Factory
+	migrator                    *sql.MigrationManager
+	dbOptsModifier              []func(details *pop.ConnectionDetails)
+	httpClientOpts              []httpx.ResilientOptions
 
 	keyManager     jwk.Manager
 	consentManager consent.Manager
@@ -140,11 +144,17 @@ func (m *RegistrySQL) ResourceOwnerPasswordCredentialsGrantStorage() foauth2.Res
 
 // OpenIDConnectRequestStorage implements openid.OIDCRequestStorageProvider
 func (m *RegistrySQL) OpenIDConnectRequestStorage() openid.OpenIDConnectRequestStorage {
+	if m.openIDConnectRequestStorage != nil {
+		return m.openIDConnectRequestStorage
+	}
 	return m.OAuth2Storage()
 }
 
 // PKCERequestStorage implements pkce.PKCERequestStorageProvider
 func (m *RegistrySQL) PKCERequestStorage() pkce.PKCERequestStorage {
+	if m.pkceRequestStorage != nil {
+		return m.pkceRequestStorage
+	}
 	return m.OAuth2Storage()
 }
 
@@ -270,6 +280,7 @@ func (m *RegistrySQL) ConsentManager() consent.Manager {
 	}
 	return &sql.ConsentPersister{BasePersister: m.basePersister}
 }
+
 func (m *RegistrySQL) ObfuscatedSubjectManager() consent.ObfuscatedSubjectManager {
 	return m.Persister()
 }
@@ -326,7 +337,7 @@ func (m *RegistrySQL) RegisterPublicRoutes(ctx context.Context, public *httprout
 func (m *RegistrySQL) RegisterAdminRoutes(admin *httprouterx.RouterAdmin) {
 	m.HealthHandler().SetHealthRoutes(admin, true)
 	m.HealthHandler().SetVersionRoutes(admin)
-	prometheusx.SetMuxRoutes(admin)
+	admin.GET(prometheusx.MetricsPrometheusPath, prometheusx.Handler().ServeHTTP)
 
 	consent.NewHandler(m).SetRoutes(admin)
 	jwk.NewHandler(m).SetAdminRoutes(admin)
@@ -452,19 +463,22 @@ func (m *RegistrySQL) CookieStore(ctx context.Context) (sessions.Store, error) {
 }
 
 func (m *RegistrySQL) HTTPClient(_ context.Context, opts ...httpx.ResilientOptions) *retryablehttp.Client {
-	opts = append(opts,
+	clientOpts := []httpx.ResilientOptions{
 		httpx.ResilientClientWithLogger(m.Logger()),
 		httpx.ResilientClientWithMaxRetry(2),
-		httpx.ResilientClientWithConnectionTimeout(30*time.Second))
+		httpx.ResilientClientWithConnectionTimeout(30 * time.Second),
+	}
 
+	clientOpts = append(clientOpts, m.httpClientOpts...)
+	clientOpts = append(clientOpts, opts...)
 	if m.Config().ClientHTTPNoPrivateIPRanges() {
-		opts = append(
-			opts,
+		clientOpts = append(
+			clientOpts,
 			httpx.ResilientClientDisallowInternalIPs(),
 			httpx.ResilientClientAllowInternalIPRequestsTo(m.Config().ClientHTTPPrivateIPExceptionURLs()...),
 		)
 	}
-	return httpx.NewResilientClient(opts...)
+	return httpx.NewResilientClient(clientOpts...)
 }
 
 func (m *RegistrySQL) OAuth2Provider() fosite.OAuth2Provider {
@@ -510,6 +524,13 @@ func (m *RegistrySQL) OAuth2JWTStrategy() foauth2.AccessTokenStrategy {
 		}
 	}
 	return m.jwtStrategy
+}
+
+func (m *RegistrySQL) OAuth2AuthorizeCodeStrategy() foauth2.AuthorizeCodeStrategy {
+	if m.authorizeCodeStrategy != nil {
+		return m.authorizeCodeStrategy
+	}
+	return m.OAuth2HMACStrategy()
 }
 
 // rfc8628HMACStrategy returns the rfc8628 strategy

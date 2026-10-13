@@ -78,7 +78,7 @@ func (p *Persister) CreateGrant(ctx context.Context, g trust.Grant, publicKey jo
 	return p.Transaction(ctx, func(ctx context.Context, c *pop.Connection) error {
 		// add key, if it doesn't exist
 		if _, err := p.d.KeyManager().GetKey(ctx, g.PublicKey.Set, g.PublicKey.KeyID); err != nil {
-			if !errors.Is(err, sqlcon.ErrNoRows) {
+			if !errors.Is(err, sqlcon.ErrNoRows()) {
 				return sqlcon.HandleError(err)
 			}
 
@@ -162,7 +162,7 @@ func (p *Persister) FlushInactiveGrants(ctx context.Context, notAfter time.Time,
 
 	deleteUntil := time.Now().UTC()
 	if deleteUntil.After(notAfter) {
-		deleteUntil = notAfter
+		deleteUntil = notAfter.UTC()
 	}
 	return sqlcon.HandleError(p.QueryWithNetwork(ctx).Where("expires_at < ?", deleteUntil).Delete(&SQLGrant{}))
 }
@@ -173,7 +173,8 @@ func (p *Persister) GetPublicKey(ctx context.Context, issuer string, subject str
 	defer otelx.End(span, &err)
 
 	tableName := SQLGrant{}.TableName()
-	// Index hint.
+	// This @index hint is CockroachDB-only; PostgreSQL and YugabyteDB use the
+	// unadorned table name.
 	if p.Connection(ctx).Dialect.Name() == "cockroach" {
 		tableName += "@hydra_oauth2_trusted_jwt_bearer_issuer_nid_uq_idx"
 	}
@@ -264,7 +265,8 @@ func (p *Persister) GetPublicKeyScopes(ctx context.Context, issuer string, subje
 	defer otelx.End(span, &err)
 
 	tableName := SQLGrant{}.TableName()
-	// Index hint.
+	// This @index hint is CockroachDB-only; PostgreSQL and YugabyteDB use the
+	// unadorned table name.
 	if p.Connection(ctx).Dialect.Name() == "cockroach" {
 		tableName += "@hydra_oauth2_trusted_jwt_bearer_issuer_nid_uq_idx"
 	}

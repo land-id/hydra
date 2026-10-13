@@ -26,7 +26,7 @@ func (c *AuthorizeExplicitGrantHandler) HandleTokenEndpointRequest(ctx context.C
 
 	code := request.GetRequestForm().Get("code")
 	signature := c.Strategy.AuthorizeCodeStrategy().AuthorizeCodeSignature(ctx, code)
-	authorizeRequest, err := c.Storage.AuthorizeCodeStorage().GetAuthorizeCodeSession(ctx, signature, request.GetSession())
+	authorizeRequest, err := c.Storage.AuthorizeCodeStorage().GetAuthorizeCodeSession(ctx, code, signature, request.GetSession())
 	if errors.Is(err, fosite.ErrInvalidatedAuthorizeCode) {
 		if authorizeRequest == nil {
 			return fosite.ErrServerError.
@@ -120,7 +120,7 @@ func (c *AuthorizeExplicitGrantHandler) PopulateTokenEndpointResponse(ctx contex
 
 	code := requester.GetRequestForm().Get("code")
 	signature := c.Strategy.AuthorizeCodeStrategy().AuthorizeCodeSignature(ctx, code)
-	authorizeRequest, err := c.Storage.AuthorizeCodeStorage().GetAuthorizeCodeSession(ctx, signature, requester.GetSession())
+	authorizeRequest, err := c.Storage.AuthorizeCodeStorage().GetAuthorizeCodeSession(ctx, code, signature, requester.GetSession())
 	if err != nil {
 		return errorsx.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
 	} else if err := c.Strategy.AuthorizeCodeStrategy().ValidateAuthorizeCode(ctx, requester, code); err != nil {
@@ -150,7 +150,7 @@ func (c *AuthorizeExplicitGrantHandler) PopulateTokenEndpointResponse(ctx contex
 	}
 
 	err = c.Storage.Transaction(ctx, func(ctx context.Context) error {
-		if err := c.Storage.AuthorizeCodeStorage().InvalidateAuthorizeCodeSession(ctx, signature); err != nil {
+		if err := c.Storage.AuthorizeCodeStorage().InvalidateAuthorizeCodeSession(ctx, code, signature); err != nil {
 			return err
 		}
 		if err := c.Storage.AccessTokenStorage().CreateAccessTokenSession(ctx, accessSignature, requester.Sanitize([]string{})); err != nil {
@@ -164,6 +164,14 @@ func (c *AuthorizeExplicitGrantHandler) PopulateTokenEndpointResponse(ctx contex
 		return nil
 	})
 	if err != nil {
+		// A storage call inside the transaction may return a deliberate
+		// client-facing grant error (e.g. invalid_grant when a code was
+		// already used). Preserve its status instead of masking it as a
+		// server error, so a losing concurrent redemption returns 400
+		// invalid_grant rather than 500.
+		if errors.Is(err, fosite.ErrInvalidGrant) {
+			return errorsx.WithStack(err)
+		}
 		return errors.WithStack(fosite.ErrServerError.WithWrap(err).WithDebug(err.Error()))
 	}
 

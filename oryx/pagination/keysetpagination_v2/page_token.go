@@ -4,18 +4,31 @@
 package keysetpagination
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"time"
 
 	"github.com/gofrs/uuid"
 	"github.com/pkg/errors"
-	"github.com/ssoready/hyrumtoken"
 
 	"github.com/ory/herodot"
+
+	"github.com/ory/x/aead"
 )
 
-var fallbackEncryptionKey = &[32]byte{}
+// pageTokenContext is passed as additional authenticated data to the AEAD.
+// It binds the ciphertext to its purpose: even if the encryption key is
+// reused in another context (for example when it is derived from a shared
+// system secret), ciphertexts from that context are rejected as page tokens
+// and vice versa.
+const pageTokenContext = "ory/keysetpagination_v2/page_token"
+
+// fallbackEncryptionKey seals page tokens when no pagination secrets are
+// configured. It is well known, so those tokens are only obfuscated, not
+// authenticated. Configure pagination secrets to authenticate tokens.
+var fallbackEncryptionKey [32]byte
 
 type (
 	PageToken struct {
@@ -56,9 +69,18 @@ func (t PageToken) Columns() []Column { return t.cols }
 func (t PageToken) Encrypt(keys [][32]byte) string {
 	key := fallbackEncryptionKey
 	if len(keys) > 0 {
-		key = &keys[0]
+		key = keys[0]
 	}
-	return hyrumtoken.Marshal(key, t)
+	enc, err := t.encrypt(key)
+	if err != nil {
+		// This should basically never happen, only if reading from the random source or marshaling the token fails.
+		// In both cases, we have a bigger problem than just not being able to generate the page token.
+		// Therefore, if we do get an error, there is no point in returning it to the client,
+		// as we already have a working result set. With this string, the next page will return an error,
+		// but that is better than breaking the current page.
+		return "internal error: failed to generate page token"
+	}
+	return enc
 }
 
 func (t PageToken) MarshalJSON() ([]byte, error) {
@@ -109,7 +131,9 @@ func (t PageToken) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toEncode)
 }
 
-var ErrPageTokenExpired = herodot.ErrBadRequest.WithReason("page token expired, do not persist page tokens")
+func ErrPageTokenExpired() *herodot.DefaultError {
+	return herodot.ErrBadRequest().WithError("page token expired, do not persist page tokens")
+}
 
 func (t *PageToken) UnmarshalJSON(data []byte) error {
 	rawToken := jsonPageToken{}
@@ -143,9 +167,79 @@ func (t *PageToken) UnmarshalJSON(data []byte) error {
 		now = t.testNow
 	}
 	if rawToken.ExpiresAt.Before(now().UTC()) {
-		return errors.WithStack(ErrPageTokenExpired)
+		return errors.WithStack(ErrPageTokenExpired())
 	}
 	return nil
 }
 
 func NewPageToken(cols ...Column) PageToken { return PageToken{cols: cols} }
+
+func (t *PageToken) encrypt(key [32]byte) (string, error) {
+	raw, err := json.Marshal(t)
+	if err != nil {
+		return "", errors.Wrap(err, "cannot marshal page token")
+	}
+
+	a, err := aead.New(key)
+	if err != nil {
+		return "", errors.Wrap(err, "cannot create AEAD")
+	}
+
+	// The nonce is prepended to the ciphertext. AEADs that manage the nonce
+	// internally report a nonce size of zero, so this also covers them.
+	nonce := make([]byte, a.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", errors.Wrap(err, "cannot generate nonce")
+	}
+
+	return base64.URLEncoding.EncodeToString(a.Seal(nonce, nonce, raw, []byte(pageTokenContext))), nil
+}
+
+func (t *PageToken) decrypt(key [32]byte, s string) error {
+	if s == "" {
+		return errors.WithStack(ErrInvalidPaginationToken())
+	}
+
+	raw, err := base64.URLEncoding.DecodeString(s)
+	if err != nil {
+		return errors.WithStack(ErrInvalidPaginationToken())
+	}
+
+	dec, err := openAEAD(key, raw)
+	if err != nil {
+		// Tokens issued before the switch to a context-bound AEAD are sealed
+		// with NaCl secretbox. Remove this fallback once all tokens issued by
+		// the previous version have expired.
+		var ok bool
+		dec, ok = aead.OpenLegacySecretbox(key, raw)
+		if !ok {
+			return errors.WithStack(ErrInvalidPaginationToken())
+		}
+	}
+
+	if err := json.Unmarshal(dec, t); err != nil {
+		if errors.As(err, new(*herodot.DefaultError)) {
+			return err
+		}
+		return errors.WithStack(herodot.ErrInternalServerError().WithReason("unable to unmarshal page token").WithDebug(err.Error()))
+	}
+
+	return nil
+}
+
+func openAEAD(key [32]byte, raw []byte) ([]byte, error) {
+	a, err := aead.New(key)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create AEAD")
+	}
+	if len(raw) < a.NonceSize() {
+		return nil, errors.New("ciphertext too short")
+	}
+	nonce, ciphertext := raw[:a.NonceSize()], raw[a.NonceSize():]
+	bs, err := a.Open(nil, nonce, ciphertext, []byte(pageTokenContext))
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot open AEAD")
+	}
+
+	return bs, nil
+}

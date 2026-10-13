@@ -215,7 +215,9 @@ func TestDeviceTokenRequest(t *testing.T) {
 			}
 
 			var token *oauth2.Token
-			token, err = oauthClient.DeviceAccessToken(context.Background(), &oauth2.DeviceAuthResponse{DeviceCode: code})
+			// Interval: 1 keeps the x/oauth2 poll loop at its 1s floor; a zero
+			// value makes the client fall back to its own 5s default.
+			token, err = oauthClient.DeviceAccessToken(context.Background(), &oauth2.DeviceAuthResponse{DeviceCode: code, Interval: 1})
 
 			if testCase.check != nil {
 				testCase.check(t, token, err)
@@ -410,10 +412,6 @@ func TestDeviceCodeWithDefaultStrategy(t *testing.T) {
 		return i
 	}
 
-	waitForRefreshTokenExpiry := func() {
-		time.Sleep(reg.Config().GetRefreshTokenLifespan(ctx) + time.Second)
-	}
-
 	t.Run("case=checks if request fails when audience does not match", func(t *testing.T) {
 		testhelpers.NewLoginConsentUI(t, reg.Config(), testhelpers.HTTPServerNoExpectedCallHandler(t), testhelpers.HTTPServerNoExpectedCallHandler(t))
 		_, conf := newDeviceClient(t, reg)
@@ -550,18 +548,18 @@ func TestDeviceCodeWithDefaultStrategy(t *testing.T) {
 					assert.False(t, i.Get("active").Bool(), "%s", i)
 				})
 
-				t.Run("followup=original refresh token is no longer valid", func(t *testing.T) {
-					_, err := conf.TokenSource(context.Background(), token).Token()
-					assert.Error(t, err)
-				})
-
 				t.Run("followup=but fail subsequent refresh because expiry was reached", func(t *testing.T) {
-					waitForRefreshTokenExpiry()
+					expireRefreshToken(t, reg, refreshedToken.RefreshToken)
 
 					// Force golang to refresh token
 					refreshedToken.Expiry = refreshedToken.Expiry.Add(-time.Hour * 24)
 					_, err := conf.TokenSource(context.Background(), refreshedToken).Token()
 					require.Error(t, err)
+				})
+
+				t.Run("followup=original refresh token is no longer valid", func(t *testing.T) {
+					_, err := conf.TokenSource(context.Background(), token).Token()
+					assert.Error(t, err)
 				})
 			})
 		}
